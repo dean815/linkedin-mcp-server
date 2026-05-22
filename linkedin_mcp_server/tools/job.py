@@ -113,8 +113,20 @@ def register_job_tools(
                 response references where `kind == "company_urn"`.
 
         Returns:
-            Dict with url, sections (name -> raw text), job_ids (list of
-            numeric job ID strings usable with get_job_details), and optional references.
+            Dict with:
+            - url: the constructed LinkedIn search URL
+            - sections: {"search_results": <raw text>} — preserved for backwards
+              compatibility
+            - job_ids: list of numeric job ID strings usable with get_job_details
+            - jobs: list of structured per-job dicts parsed from the search results
+              page, each containing {job_id, url, title, company, location,
+              posted_at_iso, posted_at_precision, work_type, easy_apply}. Best-
+              effort: missing fields fail soft (empty strings or None). The
+              `posted_at_precision` value is one of "hour"/"day"/"week"/"month"/
+              "min_30d_ago" (the last indicating "≥30 days, exact unknown" when
+              LinkedIn shows "30+ days ago"). Eliminates N+1 get_job_details
+              calls for consumers that need basic per-job metadata.
+            - references: optional, included when present (same shape as today)
         """
         try:
             extractor = extractor or await get_ready_extractor(

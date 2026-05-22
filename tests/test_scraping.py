@@ -1,5 +1,6 @@
 """Tests for the LinkedInExtractor scraping engine."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -134,6 +135,126 @@ class TestBuildJobSearchUrl:
         assert "f_EA=true" in url
         assert "sortBy=DD" in url
         assert "f_C=69022212,8140" in url
+
+
+# Anchor for relative-time parser tests below.
+_NOW = datetime(2026, 5, 21, 18, 0, 0, tzinfo=timezone.utc)
+
+
+class TestParseRelativeTime:
+    """Tests for _parse_relative_time, which converts LinkedIn's relative-time
+    strings ("2 days ago") into absolute ISO timestamps with a precision tag."""
+
+    def test_hours_ago(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("2 hours ago", _NOW)
+        assert precision == "hour"
+        assert ts == _NOW - timedelta(hours=2)
+
+    def test_one_hour_singular(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("1 hour ago", _NOW)
+        assert precision == "hour"
+        assert ts == _NOW - timedelta(hours=1)
+
+    def test_days_ago(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("3 days ago", _NOW)
+        assert precision == "day"
+        assert ts == _NOW - timedelta(days=3)
+
+    def test_weeks_ago(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("2 weeks ago", _NOW)
+        assert precision == "week"
+        assert ts == _NOW - timedelta(weeks=2)
+
+    def test_months_ago(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("1 month ago", _NOW)
+        assert precision == "month"
+        # 1 month approximated as 30 days
+        assert ts == _NOW - timedelta(days=30)
+
+    def test_thirty_plus_days(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("30+ days ago", _NOW)
+        assert precision == "min_30d_ago"
+        assert ts == _NOW - timedelta(days=30)
+
+    def test_posted_prefix(self):
+        ts, precision = LinkedInExtractor._parse_relative_time(
+            "Posted 5 days ago", _NOW
+        )
+        assert precision == "day"
+        assert ts == _NOW - timedelta(days=5)
+
+    def test_reposted_prefix(self):
+        ts, precision = LinkedInExtractor._parse_relative_time(
+            "Reposted 2 days ago", _NOW
+        )
+        assert precision == "day"
+        assert ts == _NOW - timedelta(days=2)
+
+    def test_unparseable_returns_none(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("random text", _NOW)
+        assert ts is None
+        assert precision is None
+
+    def test_empty_returns_none(self):
+        ts, precision = LinkedInExtractor._parse_relative_time("", _NOW)
+        assert ts is None
+        assert precision is None
+
+
+class TestCardTextToJob:
+    """Tests for _card_text_to_job, which parses one job card's innerText
+    into a structured record."""
+
+    def test_full_card(self):
+        text = "Customer Engineer\nHex\nNew York, NY (Hybrid)\n2 days ago\nEasy Apply"
+        job = LinkedInExtractor._card_text_to_job(text, "111", _NOW)
+        assert job["job_id"] == "111"
+        assert job["url"] == "https://www.linkedin.com/jobs/view/111/"
+        assert job["title"] == "Customer Engineer"
+        assert job["company"] == "Hex"
+        assert job["location"] == "New York, NY (Hybrid)"
+        assert job["work_type"] == "Hybrid"
+        assert job["easy_apply"] is True
+        assert job["posted_at_precision"] == "day"
+        assert job["posted_at_iso"] == (_NOW - timedelta(days=2)).isoformat()
+
+    def test_minimal_card(self):
+        """Three-line card with no work_type, no easy_apply, no posted_at."""
+        text = "Software Engineer\nAnthropic\nSan Francisco, CA"
+        job = LinkedInExtractor._card_text_to_job(text, "222", _NOW)
+        assert job["title"] == "Software Engineer"
+        assert job["company"] == "Anthropic"
+        assert job["location"] == "San Francisco, CA"
+        assert job["work_type"] is None
+        assert job["easy_apply"] is False
+        assert job["posted_at_iso"] is None
+        assert job["posted_at_precision"] is None
+
+    def test_thirty_plus_days_card(self):
+        text = "Staff Engineer\nOld Company\nRemote\n30+ days ago"
+        job = LinkedInExtractor._card_text_to_job(text, "333", _NOW)
+        assert job["work_type"] == "Remote"
+        assert job["posted_at_precision"] == "min_30d_ago"
+        assert job["posted_at_iso"] == (_NOW - timedelta(days=30)).isoformat()
+
+    def test_remote_work_type_detected(self):
+        text = "Developer\nCo\nRemote\n1 day ago"
+        job = LinkedInExtractor._card_text_to_job(text, "444", _NOW)
+        assert job["work_type"] == "Remote"
+
+    def test_onsite_work_type_detected(self):
+        text = "Developer\nCo\nNew York, NY (On-site)\n1 day ago"
+        job = LinkedInExtractor._card_text_to_job(text, "555", _NOW)
+        assert job["work_type"] == "On-site"
+
+    def test_empty_card_text_fails_soft(self):
+        """Empty input yields empty strings, not exceptions."""
+        job = LinkedInExtractor._card_text_to_job("", "666", _NOW)
+        assert job["job_id"] == "666"
+        assert job["title"] == ""
+        assert job["company"] == ""
+        assert job["location"] == ""
+        assert job["posted_at_iso"] is None
 
 
 @pytest.fixture
@@ -1846,6 +1967,101 @@ class TestSearchJobs:
 
         assert result["job_ids"] == ["111", "222", "333"]
         assert "search_results" in result["sections"]
+
+    async def test_returns_structured_jobs(self, mock_page):
+        """search_jobs should include a `jobs` list of structured per-job dicts."""
+        extractor = LinkedInExtractor(mock_page)
+        with (
+            patch.object(
+                extractor,
+                "_extract_search_page",
+                new_callable=AsyncMock,
+                return_value=extracted("Job text"),
+            ),
+            patch.object(
+                extractor,
+                "_extract_job_ids",
+                new_callable=AsyncMock,
+                return_value=["111"],
+            ),
+            patch.object(
+                extractor,
+                "_extract_search_cards",
+                new_callable=AsyncMock,
+                return_value=[
+                    {
+                        "job_id": "111",
+                        "card_text": (
+                            "Customer Engineer\n"
+                            "Hex\n"
+                            "New York, NY (Hybrid)\n"
+                            "2 days ago\n"
+                            "Easy Apply"
+                        ),
+                    }
+                ],
+            ),
+            patch.object(
+                extractor,
+                "_get_total_search_pages",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "linkedin_mcp_server.scraping.extractor.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await extractor.search_jobs("python", max_pages=1)
+
+        assert "jobs" in result
+        assert len(result["jobs"]) == 1
+        job = result["jobs"][0]
+        assert job["job_id"] == "111"
+        assert job["url"] == "https://www.linkedin.com/jobs/view/111/"
+        assert job["title"] == "Customer Engineer"
+        assert job["company"] == "Hex"
+        assert job["location"] == "New York, NY (Hybrid)"
+        assert job["work_type"] == "Hybrid"
+        assert job["easy_apply"] is True
+        assert job["posted_at_precision"] == "day"
+        assert job["posted_at_iso"] is not None
+
+    async def test_existing_consumers_unbroken_when_cards_unavailable(self, mock_page):
+        """When _extract_search_cards is unmocked (returns mock's default dict),
+        the search_jobs flow should still return job_ids and an empty jobs list
+        — backwards compatibility for any existing consumer that ignores
+        structured cards."""
+        extractor = LinkedInExtractor(mock_page)
+        with (
+            patch.object(
+                extractor,
+                "_extract_search_page",
+                new_callable=AsyncMock,
+                return_value=extracted("Job text"),
+            ),
+            patch.object(
+                extractor,
+                "_extract_job_ids",
+                new_callable=AsyncMock,
+                return_value=["111"],
+            ),
+            patch.object(
+                extractor,
+                "_get_total_search_pages",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "linkedin_mcp_server.scraping.extractor.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await extractor.search_jobs("python", max_pages=1)
+
+        assert result["job_ids"] == ["111"]
+        # `jobs` is always present; empty when card extraction fails soft
+        assert result["jobs"] == []
 
     async def test_returns_references(self, mock_page):
         extractor = LinkedInExtractor(mock_page)

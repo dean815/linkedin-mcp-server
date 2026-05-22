@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import re
@@ -2495,6 +2496,159 @@ class LinkedInExtractor:
             }"""
         )
 
+    async def _extract_search_cards(self) -> list[dict[str, str]]:
+        """Extract per-card innerText paired with job_id from the current page.
+
+        Walks every ``a[href*="/jobs/view/"]`` anchor, climbs to the nearest
+        ``<li>`` ancestor (the card), and emits the card's ``innerText``
+        alongside the job_id parsed from the anchor href. Cards are
+        deduplicated by job_id in DOM order.
+
+        Returns a list of ``{"job_id": str, "card_text": str}`` dicts.
+        Returns an empty list (rather than raising) if the page hasn't
+        rendered the expected structure — keeps the structured ``jobs[]``
+        field a best-effort augmentation of ``job_ids``.
+        """
+        try:
+            result = await self._page.evaluate(
+                """() => {
+                    const links = document.querySelectorAll('a[href*="/jobs/view/"]');
+                    const seen = new Set();
+                    const cards = [];
+                    for (const a of links) {
+                        const match = a.href.match(/\\/jobs\\/view\\/(\\d+)/);
+                        if (!match || seen.has(match[1])) continue;
+                        seen.add(match[1]);
+                        const card = a.closest('li') || a.parentElement;
+                        if (!card) continue;
+                        cards.push({
+                            job_id: match[1],
+                            card_text: card.innerText || ''
+                        });
+                    }
+                    return cards;
+                }"""
+            )
+        except Exception as e:
+            logger.debug("Could not extract search cards: %s", e)
+            return []
+
+        if not isinstance(result, list):
+            return []
+
+        return [
+            {
+                "job_id": str(entry.get("job_id", "")),
+                "card_text": str(entry.get("card_text", "")),
+            }
+            for entry in result
+            if isinstance(entry, dict) and entry.get("job_id")
+        ]
+
+    @staticmethod
+    def _parse_relative_time(
+        text: str, now: datetime
+    ) -> tuple[datetime | None, str | None]:
+        """Parse a LinkedIn relative-time string into ``(timestamp, precision)``.
+
+        Handles formats like:
+        - "2 hours ago" / "1 hour ago"     -> precision "hour"
+        - "5 days ago" / "1 day ago"        -> precision "day"
+        - "2 weeks ago" / "1 week ago"      -> precision "week"
+        - "1 month ago"                     -> precision "month" (approx 30d)
+        - "30+ days ago"                    -> precision "min_30d_ago" (≥30d, exact unknown)
+        - Optional "Posted" or "Reposted" prefix
+
+        Locale: English only. Per CLAUDE.md scraping rules, text-based
+        classification is locale-dependent; future PRs can add a per-locale
+        table if other LinkedIn UI languages are needed.
+
+        Returns ``(None, None)`` if no relative-time pattern matches.
+        """
+        if not text:
+            return None, None
+
+        # "30+ days ago" must be checked before the generic regex because
+        # the "+" character is not whitespace, so the generic pattern would
+        # not match it anyway — but the explicit branch keeps intent clear.
+        if "30+ days ago" in text:
+            return now - timedelta(days=30), "min_30d_ago"
+
+        match = re.search(
+            r"(?:Posted|Reposted)?\s*(\d+)\s+(hour|day|week|month)s?\s+ago",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None, None
+
+        n = int(match.group(1))
+        unit = match.group(2).lower()
+
+        if unit == "hour":
+            return now - timedelta(hours=n), "hour"
+        if unit == "day":
+            return now - timedelta(days=n), "day"
+        if unit == "week":
+            return now - timedelta(weeks=n), "week"
+        if unit == "month":
+            # LinkedIn shows month-granularity only for older postings;
+            # 30-day approximation is good enough for date-range backfill.
+            return now - timedelta(days=n * 30), "month"
+        return None, None
+
+    @staticmethod
+    def _card_text_to_job(card_text: str, job_id: str, now: datetime) -> dict[str, Any]:
+        """Parse a single job search card's innerText into a structured record.
+
+        Card layout is best-effort. Missing fields fail soft:
+        - title/company/location default to empty strings
+        - posted_at_iso, posted_at_precision, work_type default to None
+        - easy_apply defaults to False
+        """
+        lines = [line.strip() for line in card_text.splitlines() if line.strip()]
+
+        title = lines[0] if len(lines) > 0 else ""
+        company = lines[1] if len(lines) > 1 else ""
+        location = lines[2] if len(lines) > 2 else ""
+
+        # Scan all lines for a relative-time string.
+        posted_at: datetime | None = None
+        precision: str | None = None
+        for line in lines:
+            ts, p = LinkedInExtractor._parse_relative_time(line, now)
+            if ts is not None:
+                posted_at, precision = ts, p
+                break
+
+        # Work-type detection. Check Hybrid before Remote so that
+        # "Remote (Hybrid)" labels are classified as Hybrid; check
+        # On-site last because "site" appears more permissively.
+        text_lower = card_text.lower()
+        work_type: str | None = None
+        if "hybrid" in text_lower:
+            work_type = "Hybrid"
+        elif "remote" in text_lower:
+            work_type = "Remote"
+        elif (
+            "on-site" in text_lower or "on site" in text_lower or "onsite" in text_lower
+        ):
+            work_type = "On-site"
+
+        easy_apply = "easy apply" in text_lower
+
+        return {
+            "job_id": job_id,
+            "url": f"https://www.linkedin.com/jobs/view/{job_id}/",
+            "title": title,
+            "company": company,
+            "location": location,
+            "posted_at_iso": posted_at.isoformat() if posted_at else None,
+            "posted_at_precision": precision,
+            "work_type": work_type,
+            "easy_apply": easy_apply,
+        }
+
     async def _extract_search_page(
         self,
         url: str,
@@ -2702,12 +2856,17 @@ class LinkedInExtractor:
             company_urn=company_urn,
         )
         all_job_ids: list[str] = []
+        all_jobs: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         page_texts: list[str] = []
         page_references: list[Reference] = []
         section_errors: dict[str, dict[str, Any]] = {}
         total_pages: int | None = None
         total_pages_queried = False
+        # Single timestamp anchor for relative-time parsing across all pages of
+        # this search. Multi-page scrape variance is seconds — negligible vs
+        # LinkedIn's coarsest precision (hours).
+        search_started_at = datetime.now(timezone.utc)
 
         for page_num in range(max_pages):
             # Stop if we already know we've reached the last page
@@ -2769,9 +2928,21 @@ class LinkedInExtractor:
                     logger.debug("No new job IDs on page %d, stopping", page_num + 1)
                     break
 
+                # Extract structured cards from the same loaded page. This is
+                # best-effort — if it fails (or the test mock returns nothing),
+                # we still emit job_ids unchanged. Existing consumers are
+                # unaffected; new consumers get `jobs[]` populated.
+                page_cards = await self._extract_search_cards()
+                cards_by_id = {c["job_id"]: c["card_text"] for c in page_cards}
+
                 for jid in new_ids:
                     seen_ids.add(jid)
                     all_job_ids.append(jid)
+                    card_text = cards_by_id.get(jid)
+                    if card_text is not None:
+                        all_jobs.append(
+                            self._card_text_to_job(card_text, jid, search_started_at)
+                        )
 
                 page_texts.append(extracted.text)
                 if extracted.references:
@@ -2795,6 +2966,7 @@ class LinkedInExtractor:
             if page_texts
             else {},
             "job_ids": all_job_ids,
+            "jobs": all_jobs,
         }
         if page_references:
             result["references"] = {
