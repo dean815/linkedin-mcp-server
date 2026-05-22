@@ -101,6 +101,20 @@ class TestBuildJobSearchUrl:
         url = LinkedInExtractor._build_job_search_url("python", job_type="F")
         assert "f_JT=F" in url
 
+    def test_company_urn_single(self):
+        url = LinkedInExtractor._build_job_search_url("python", company_urn="69022212")
+        assert "f_C=69022212" in url
+
+    def test_company_urn_csv(self):
+        url = LinkedInExtractor._build_job_search_url(
+            "python", company_urn="69022212,8140"
+        )
+        assert "f_C=69022212,8140" in url
+
+    def test_company_urn_omitted(self):
+        url = LinkedInExtractor._build_job_search_url("python")
+        assert "f_C" not in url
+
     def test_all_filters_combined(self):
         url = LinkedInExtractor._build_job_search_url(
             "python",
@@ -110,6 +124,7 @@ class TestBuildJobSearchUrl:
             work_type="remote",
             easy_apply=True,
             sort_by="date",
+            company_urn="69022212,8140",
         )
         assert "keywords=python" in url
         assert "location=Berlin" in url
@@ -118,6 +133,7 @@ class TestBuildJobSearchUrl:
         assert "f_WT=2" in url
         assert "f_EA=true" in url
         assert "sortBy=DD" in url
+        assert "f_C=69022212,8140" in url
 
 
 @pytest.fixture

@@ -88,6 +88,7 @@ def register_job_tools(
         work_type: str | None = None,
         easy_apply: bool = False,
         sort_by: str | None = None,
+        company_urn: str | None = None,
         extractor: Any | None = None,
     ) -> dict[str, Any]:
         """
@@ -106,6 +107,10 @@ def register_job_tools(
             work_type: Filter by work type, comma-separated (on_site, remote, hybrid)
             easy_apply: Only show Easy Apply jobs (default false)
             sort_by: Sort results (date, relevance)
+            company_urn: Filter to one or more LinkedIn companies. Accepts a
+                numeric URN id (e.g., "69022212") or a comma-separated list
+                (e.g., "69022212,8140"). Obtain URNs from `search_companies`
+                response references where `kind == "company_urn"`.
 
         Returns:
             Dict with url, sections (name -> raw text), job_ids (list of
@@ -136,6 +141,7 @@ def register_job_tools(
                 work_type=work_type,
                 easy_apply=easy_apply,
                 sort_by=sort_by,
+                company_urn=company_urn,
             )
 
             await ctx.report_progress(progress=100, total=100, message="Complete")

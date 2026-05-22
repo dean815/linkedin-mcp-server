@@ -2616,12 +2616,20 @@ class LinkedInExtractor:
         work_type: str | None = None,
         easy_apply: bool = False,
         sort_by: str | None = None,
+        company_urn: str | None = None,
     ) -> str:
         """Build a LinkedIn job search URL with optional filters.
 
         Human-readable names are normalized to LinkedIn URL codes.
         Comma-separated values are normalized individually.
         Unknown values pass through unchanged.
+
+        ``company_urn`` accepts one or more numeric LinkedIn company URN ids
+        (e.g. ``"69022212"`` or ``"69022212,8140"``) as returned by
+        ``search_companies`` references with ``kind: "company_urn"``. It maps
+        to LinkedIn's ``f_C`` URL parameter. Full URN strings of the form
+        ``urn:li:fsd_company:69022212`` are not accepted — pass only the
+        numeric id portion.
         """
         params = f"keywords={quote_plus(keywords)}"
         if location:
@@ -2641,6 +2649,8 @@ class LinkedInExtractor:
         if sort_by:
             mapped = _SORT_BY_MAP.get(sort_by.strip(), sort_by)
             params += f"&sortBy={quote_plus(mapped)}"
+        if company_urn:
+            params += f"&f_C={_normalize_csv(company_urn, {})}"
 
         return f"https://www.linkedin.com/jobs/search/?{params}"
 
@@ -2655,6 +2665,7 @@ class LinkedInExtractor:
         work_type: str | None = None,
         easy_apply: bool = False,
         sort_by: str | None = None,
+        company_urn: str | None = None,
     ) -> dict[str, Any]:
         """Search for jobs with pagination and job ID extraction.
 
@@ -2672,6 +2683,9 @@ class LinkedInExtractor:
             work_type: Filter by work type (on_site, remote, hybrid)
             easy_apply: Only show Easy Apply jobs
             sort_by: Sort results (date, relevance)
+            company_urn: Filter by one or more numeric LinkedIn company URN ids
+                (e.g. "69022212" or comma-separated "69022212,8140"), as returned
+                by ``search_companies`` references with ``kind: "company_urn"``.
 
         Returns:
             {url, sections: {search_results: text}, job_ids: [str]}
@@ -2685,6 +2699,7 @@ class LinkedInExtractor:
             work_type=work_type,
             easy_apply=easy_apply,
             sort_by=sort_by,
+            company_urn=company_urn,
         )
         all_job_ids: list[str] = []
         seen_ids: set[str] = set()
