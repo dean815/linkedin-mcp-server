@@ -113,4 +113,8 @@ When you need up-to-date information about technologies used in this project, us
 
 **New dependencies:** When adding a new dependency, always add its repo to `btca.config.jsonc` (verify the default branch first: `gh api repos/OWNER/REPO --jq '.default_branch'`) and clone it into the sandbox. Resource names are shared across projects in the sandbox, so pick a name that identifies the repo unambiguously (`playwrightPython`, not `playwright`).
 
+## Working guidelines
+
+Read `.claude/dean-guidelines.md` before starting work and follow it. Claude Code pulls it in through the import below; Codex does not resolve `@` imports.
+
 @.claude/dean-guidelines.md
