@@ -1,0 +1,9 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX = "LI"
+
+[mcp_servers.greptile]
+url = "https://api.greptile.com/mcp"
+bearer_token_env_var = "GREPTILE_API_KEY"

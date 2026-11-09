@@ -215,3 +215,5 @@ scripts/snapshot_dumps/
 
 # Debug artifacts
 .debug/
+# Dean's personal guidelines stay local in public repos
+.claude/dean-guidelines.md
