@@ -252,6 +252,59 @@ def register_job_tools(
 
     @mcp.tool(
         timeout=tool_timeout,
+        title="Get Job Collection",
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+        tags={"job", "search"},
+    )
+    @tool_errors
+    async def get_job_collection(
+        collection: str,
+        ctx: Context,
+        max_pages: Annotated[int, Field(ge=1, le=10)] = 3,
+        date_posted: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Read one of LinkedIn's curated job lists.
+
+        Returns job_ids that can be passed to get_job_details for full info.
+        The lists are chosen by LinkedIn for the signed-in account and take
+        no keywords; their order and size change between calls.
+
+        Args:
+            collection: The slug from linkedin.com/jobs/collections/<slug>/
+                (e.g., "top-applicant", "recommended", "top-startups",
+                "ai-and-ml", "gen-ai", "early-stage-startups"), or
+                "hear-back" for "Jobs where you're more likely to hear back".
+            ctx: FastMCP context for progress reporting
+            max_pages: Maximum number of list pages to load (1-10, default 3)
+            date_posted: Filter by posting date (past_hour, past_24_hours,
+                past_week, past_month). Only "hear-back" applies it; the
+                other lists ignore it, reported as filters_dropped.
+
+        Returns:
+            The same dict as search_jobs: url, sections (search_results ->
+            raw text), job_ids, and optional total, promoted_job_ids,
+            references, pagination and section_errors.
+        """
+        started = time.monotonic()
+        extractor = await get_ready_extractor(ctx, tool_name="get_job_collection")
+        logger.info("Reading job collection %r (max_pages=%d)", collection, max_pages)
+
+        await ctx.report_progress(progress=0, total=100, message="Opening job list")
+
+        result = await extractor.get_job_collection(
+            collection,
+            max_pages=max_pages,
+            date_posted=date_posted,
+            tool_timeout=max(0.0, tool_timeout - (time.monotonic() - started)),
+        )
+
+        await ctx.report_progress(progress=100, total=100, message="Complete")
+
+        return result
+
+    @mcp.tool(
+        timeout=tool_timeout,
         title="Get Saved Jobs",
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"job"},

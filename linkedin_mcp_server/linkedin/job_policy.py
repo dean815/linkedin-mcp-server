@@ -187,6 +187,37 @@ RESULTS_PER_LINKEDIN_PAGE = 25
 # prefix test wants the slash.
 JOB_SEARCH_PATHS = frozenset({"/jobs/search", "/jobs/search-results"})
 
+# LinkedIn's curated job lists, such as `top-applicant`, `recommended` or
+# `gen-ai`. Each is the search page under its own path, with no keywords.
+# Measured 2026-11-11 on seven lists: `start` pages them, and `f_TPR` stays in
+# the address while the list ignores it.
+JOB_COLLECTION_SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+# "Jobs where you're more likely to hear back" has no collection path. It is
+# the redesigned search opened with this origin, which ignores keywords and
+# location but does honour `f_TPR` (76 results fell to 44 for the past week).
+HEAR_BACK_COLLECTION = "hear-back"
+_HEAR_BACK_URL = (
+    "https://www.linkedin.com/jobs/search-results/?origin=QUALIFICATION_LANDING"
+)
+
+
+def job_collection_url(collection: str) -> str:
+    """The address of one of LinkedIn's curated job lists.
+
+    Raises ValueError for anything that is not a list slug, so a caller's
+    typo or a pasted URL never becomes a navigation.
+    """
+    slug = collection.strip().strip("/").lower()
+    if slug == HEAR_BACK_COLLECTION:
+        return _HEAR_BACK_URL
+    if not JOB_COLLECTION_SLUG_RE.fullmatch(slug):
+        raise ValueError(
+            f"Not a job collection: {collection!r}. Pass the slug from "
+            "linkedin.com/jobs/collections/<slug>/, or 'hear-back'."
+        )
+    return f"https://www.linkedin.com/jobs/collections/{slug}/"
+
 
 # LinkedIn's "Worldwide" location. A search without a location is not
 # unscoped: LinkedIn applies the account's remembered location, so a posting

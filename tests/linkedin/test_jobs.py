@@ -3857,3 +3857,134 @@ class TestDismissJob:
                 await reader.dismiss_job("123")
 
         acting.assert_not_awaited()
+
+
+class TestJobCollection:
+    """Tests for get_job_collection: curated lists paged like a search."""
+
+    @staticmethod
+    async def _read(mock_page, collection, texts, ids, **kwargs):
+        reader = _reader(mock_page)
+        visited: list[str] = []
+        navigate_page = TestSearchJobs._navigating(mock_page, texts)
+
+        async def record(url, *args, **kw):
+            visited.append(url)
+            return await navigate_page(url, *args, **kw)
+
+        with (
+            patch.object(reader._pages, "_extract_search_page", side_effect=record),
+            patch.object(
+                reader._pages,
+                "_extract_job_ids",
+                new_callable=AsyncMock,
+                side_effect=ids,
+            ),
+            patch.object(
+                reader._pages,
+                "_get_total_search_pages",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                reader._pages,
+                "_extract_promoted_job_ids",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "linkedin_mcp_server.linkedin.jobs.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await reader.get_job_collection(collection, **kwargs)
+        return result, visited
+
+    async def test_pages_a_collection_by_start(self, mock_page):
+        result, visited = await self._read(
+            mock_page,
+            "top-applicant",
+            [extracted("64 results\nJob 1\nJob 2"), extracted("Job 3")],
+            [["111", "222"], ["333"]],
+            max_pages=2,
+        )
+
+        assert visited == [
+            "https://www.linkedin.com/jobs/collections/top-applicant/",
+            "https://www.linkedin.com/jobs/collections/top-applicant/?start=2",
+        ]
+        assert result["job_ids"] == ["111", "222", "333"]
+        assert result["pagination"]["reason"] == "max_pages"
+        assert "section_errors" not in result
+
+    async def test_hear_back_is_a_search_that_keeps_the_date(self, mock_page):
+        result, visited = await self._read(
+            mock_page,
+            "hear-back",
+            [extracted("Job 1"), extracted("Job 2")],
+            [["111"], ["222"]],
+            max_pages=2,
+            date_posted="past_week",
+        )
+
+        base = (
+            "https://www.linkedin.com/jobs/search-results/"
+            "?origin=QUALIFICATION_LANDING&f_TPR=r604800"
+        )
+        assert visited == [base, f"{base}&start=1"]
+        assert result["job_ids"] == ["111", "222"]
+        assert "section_errors" not in result
+
+    async def test_date_on_a_collection_is_reported_not_sent(self, mock_page):
+        result, visited = await self._read(
+            mock_page,
+            "gen-ai",
+            [extracted("Job 1")],
+            [["111"]],
+            max_pages=1,
+            date_posted="past_week",
+        )
+
+        assert visited == ["https://www.linkedin.com/jobs/collections/gen-ai/"]
+        assert result["job_ids"] == ["111"]
+        error = result["section_errors"]["search_results"]
+        assert error["error_type"] == "filters_dropped"
+        assert "date_posted" in error["error_message"]
+
+    async def test_a_redirect_off_the_list_returns_no_ids(self, mock_page):
+        reader = _reader(mock_page)
+        with (
+            patch.object(
+                reader._pages,
+                "_extract_search_page",
+                side_effect=TestSearchJobs._navigating(
+                    mock_page,
+                    [extracted("Job 1")],
+                    lands_on="https://www.linkedin.com/jobs/",
+                ),
+            ),
+            patch.object(
+                reader._pages,
+                "_extract_job_ids",
+                new_callable=AsyncMock,
+                return_value=["111"],
+            ),
+            patch.object(
+                reader._navigator,
+                "_raise_if_auth_barrier",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await reader.get_job_collection("no-such-list", max_pages=1)
+
+        assert result["job_ids"] == []
+        assert "search_results" in result["section_errors"]
+
+    @pytest.mark.parametrize(
+        "collection",
+        ["", "top applicant", "https://www.linkedin.com/jobs/", "a/b", "x?start=1"],
+    )
+    async def test_rejects_anything_but_a_slug(self, mock_page, collection):
+        reader = _reader(mock_page)
+        with pytest.raises(ValueError):
+            await reader.get_job_collection(collection)
