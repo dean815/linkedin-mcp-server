@@ -34,6 +34,7 @@ def _make_mock_extractor(result: dict) -> MagicMock:
     mock.read_company = AsyncMock(return_value=result)
     mock.read_job = AsyncMock(return_value=result)
     mock.search_jobs = AsyncMock(return_value=result)
+    mock.get_job_collection = AsyncMock(return_value=result)
     mock.get_saved_jobs = AsyncMock(return_value=result)
     mock.get_job_apply_url = AsyncMock(return_value=result)
     mock.dismiss_job = AsyncMock(return_value=result)
@@ -248,6 +249,7 @@ _A_VALID_CALL = [
     ("job", "get_job_details", {"job_id": "4252026496"}),
     ("job", "get_job_apply_url", {"job_id": "4252026496"}),
     ("job", "search_jobs", {"keywords": "python"}),
+    ("job", "get_job_collection", {"collection": "top-applicant"}),
     ("job", "get_saved_jobs", {}),
     ("job", "dismiss_job", {"job_id": "4252026496"}),
     ("job", "get_easy_apply_form", {"job_id": "4252026496"}),
@@ -2946,3 +2948,36 @@ class TestToolTimeouts:
             tool = await mcp.get_tool(name)
             assert tool is not None
             assert tool.timeout == DEFAULT_TOOL_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "collection",
+    ["top applicant", "https://www.linkedin.com/jobs/collections/recommended/", ""],
+    ids=["spaces", "pasted url", "empty"],
+)
+async def test_a_bad_job_collection_name_says_what_to_pass(collection):
+    """A name that is not a list slug is corrected, not masked.
+
+    Refused before the browser is readied, and as a coded error, since a plain
+    ValueError reaches a masked client as "Error calling tool" with the
+    correction dropped.
+    """
+    from fastmcp.exceptions import ToolError
+
+    from linkedin_mcp_server.error_handler import CodedToolError, ErrorCode
+
+    mcp = FastMCP("test", mask_error_details=True)
+    _register(mcp, "job")
+
+    with (
+        patch(
+            "linkedin_mcp_server.tools.job.get_ready_extractor",
+            new_callable=AsyncMock,
+        ) as ready,
+        pytest.raises(ToolError, match="Pass the slug") as excinfo,
+    ):
+        await mcp.call_tool("get_job_collection", {"collection": collection})
+
+    ready.assert_not_awaited()
+    assert isinstance(excinfo.value, CodedToolError)
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT

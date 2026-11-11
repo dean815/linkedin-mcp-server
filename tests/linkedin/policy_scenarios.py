@@ -394,6 +394,38 @@ async def _job_search_scenario(route: str = "/jobs/search/") -> dict[str, Any]:
     )
 
 
+async def _job_collection_scenario() -> dict[str, Any]:
+    recorder = TraceRecorder("get_job_collection__baseline", _COMMON_ALLOWED)
+    clock = FakeClock(recorder)
+    page = _page(recorder)
+    page.goto_landings.append(
+        "https://www.linkedin.com/jobs/collections/top-applicant/"
+    )
+    references = [
+        {
+            "href": "https://www.linkedin.com/jobs/view/101/",
+            "text": "Senior policy engineer",
+            "heading": "",
+        }
+    ]
+    page.script(
+        "evaluate:root_content",
+        _root("Jobs where you\u2019d be a top applicant\n64 results", references),
+    )
+    page.script("evaluate:job_total_pages", None)
+    page.script("evaluate:job_ids", {"ids": ["101", "102"], "scoped": True})
+    page.script("evaluate:job_promoted_ids", [])
+    extractor = _extractor(page)
+    arguments = {"collection": "top-applicant", "max_pages": 1}
+    async with boundaries(recorder, clock):
+        with recorder.context("get_job_collection", "search_results"):
+            result = await extractor.get_job_collection("top-applicant", max_pages=1)
+    page.assert_clean()
+    return recorder.trace(
+        {"method": "get_job_collection", "arguments": arguments}, result
+    )
+
+
 async def _dismiss_job_scenario() -> dict[str, Any]:
     recorder = TraceRecorder("dismiss_job__dismissed", _COMMON_ALLOWED | {"title"})
     clock = FakeClock(recorder)
@@ -1269,6 +1301,7 @@ TOOL_FACADE_METHODS = {
     "get_easy_apply_form",
     "get_inbox",
     "get_job_apply_url",
+    "get_job_collection",
     "get_my_profile",
     "get_saved_jobs",
     "get_sidebar_profiles",
@@ -1312,6 +1345,7 @@ async def build_policy_traces() -> dict[str, dict[str, Any]]:
             "/jobs/search-results/"
         ),
         "job-search-metadata-upgrade.json": await _job_search_upgrade_scenario(),
+        "job-collection.json": await _job_collection_scenario(),
         "saved-jobs.json": await _saved_jobs_scenario(),
         "dismiss-job.json": await _dismiss_job_scenario(),
         "feed-stale.json": await _feed_stale_scenario(),

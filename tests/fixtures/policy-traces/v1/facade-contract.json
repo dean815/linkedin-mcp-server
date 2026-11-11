@@ -56,6 +56,10 @@
         "coroutine": true,
         "signature": "(self, job_id: 'str') -> 'dict[str, Any]'"
       },
+      "get_job_collection": {
+        "coroutine": true,
+        "signature": "(self, collection: 'str', max_pages: 'int' = 3, date_posted: 'str | None' = None, tool_timeout: 'float' = 180.0) -> 'dict[str, Any]'"
+      },
       "get_my_profile": {
         "coroutine": true,
         "signature": "(self, sections: 'set[str] | None' = None, callbacks: 'ProgressCallback | None' = None, max_scrolls: 'int | None' = None) -> 'dict[str, Any]'"
@@ -124,6 +128,7 @@
       "get_easy_apply_form",
       "get_inbox",
       "get_job_apply_url",
+      "get_job_collection",
       "get_my_profile",
       "get_saved_jobs",
       "get_sidebar_profiles",
@@ -424,6 +429,44 @@
           },
           "required": [
             "job_id"
+          ],
+          "type": "object"
+        },
+        "output": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "get_job_collection": {
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "collection": {
+              "description": "The slug from linkedin.com/jobs/collections/<slug>/\n(e.g., \"top-applicant\", \"recommended\", \"top-startups\",\n\"ai-and-ml\", \"gen-ai\", \"early-stage-startups\"), or\n\"hear-back\" for \"Jobs where you're more likely to hear back\".",
+              "type": "string"
+            },
+            "date_posted": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Filter by posting date (past_hour, past_24_hours,\npast_week, past_month). Only \"hear-back\" applies it; the\nother lists ignore it, reported as filters_dropped."
+            },
+            "max_pages": {
+              "default": 3,
+              "description": "Maximum number of list pages to load (1-10, default 3)",
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "collection"
           ],
           "type": "object"
         },

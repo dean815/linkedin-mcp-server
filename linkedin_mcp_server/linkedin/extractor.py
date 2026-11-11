@@ -193,6 +193,18 @@ class LinkedInExtractor:
             tool_timeout,
         )
 
+    async def get_job_collection(
+        self,
+        collection: str,
+        max_pages: int = 3,
+        date_posted: str | None = None,
+        tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Read one of LinkedIn's curated job lists, paged like a search."""
+        return await self._jobs.get_job_collection(
+            collection, max_pages, date_posted, tool_timeout
+        )
+
     async def get_saved_jobs(
         self, max_pages: int = 3, stage: JobsTrackerStage = "saved"
     ) -> dict[str, Any]:

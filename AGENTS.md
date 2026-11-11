@@ -145,7 +145,7 @@ Optional additional keys:
 - `references: {section_name: [{kind, url, text?, context?, value?}]}` — LinkedIn URLs are relative paths; `value` carries non-URL identifiers (e.g. company URN id for `kind: "company_urn"`)
 - `section_errors: {section_name: {error_type, error_message, issue_template_path, runtime, ...}}`
 - `unknown_sections: [name, ...]`
-- `job_ids: [id, ...]` (search_jobs and get_saved_jobs)
+- `job_ids: [id, ...]` (search_jobs, get_job_collection and get_saved_jobs)
 - `total: {count, exact}` (search_jobs only) — the result count LinkedIn advertises on the first page; `exact` is false for a lower bound such as "500+"
 - `promoted_job_ids: [id, ...]` (search_jobs only) — the subset of `job_ids` shown as promoted; present only when every page could be read, so an empty list means none were
 - `pagination: {pages_fetched, next_offset, reason}` (search_jobs only) — why paging stopped: `complete`, `max_pages`, `time_budget` or `no_new_ids`; `next_offset` is the `start` the next page would have used. Absent when a failure stopped the search, which `section_errors` then explains; a `filters_dropped` or `no_matching_jobs` entry is not a failure and keeps it

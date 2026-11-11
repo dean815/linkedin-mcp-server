@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 import asyncio
 import logging
@@ -41,6 +41,7 @@ from linkedin_mcp_server.linkedin.job_policy import (
     dropped_filters_section_error,
     dropped_offset_section_error,
     easy_apply_draft_section_error,
+    job_collection_url,
     label_similar_jobs,
     lost_keywords_section_error,
     missing_description_section_error,
@@ -50,7 +51,10 @@ from linkedin_mcp_server.linkedin.job_policy import (
 )
 from linkedin_mcp_server.linkedin.link_metadata import Reference, dedupe_references
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
-from linkedin_mcp_server.linkedin.search_urls import build_job_search_url
+from linkedin_mcp_server.linkedin.search_urls import (
+    JOB_DATE_POSTED_MAP,
+    build_job_search_url,
+)
 from linkedin_mcp_server.linkedin.session import NAV_DELAY
 from linkedin_mcp_server.linkedin.text import (
     JOB_APPLY_EN_US,
@@ -274,6 +278,67 @@ class JobReader:
             easy_apply=easy_apply,
             sort_by=sort_by,
         )
+        return await self._page_job_list(
+            base_url, keywords, max_pages, tool_timeout, JOB_SEARCH_PATHS
+        )
+
+    async def get_job_collection(
+        self,
+        collection: str,
+        max_pages: int = 3,
+        date_posted: str | None = None,
+        tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Read one of LinkedIn's curated job lists, paged like a search.
+
+        Args:
+            collection: The slug from /jobs/collections/<slug>/, or "hear-back"
+            max_pages: Maximum pages to load (1-10, default 3)
+            date_posted: Honoured by "hear-back" only; the collection pages
+                ignore it, which is reported as filters_dropped
+
+        Returns:
+            The same shape as ``search_jobs``.
+        """
+        base_url = job_collection_url(collection)
+        is_search = urlparse(base_url).path.rstrip("/") in JOB_SEARCH_PATHS
+        if date_posted and is_search:
+            mapped = JOB_DATE_POSTED_MAP.get(date_posted.strip(), date_posted)
+            base_url += f"&f_TPR={quote_plus(mapped)}"
+        result = await self._page_job_list(
+            base_url,
+            "",
+            max_pages,
+            tool_timeout,
+            frozenset({urlparse(base_url).path.rstrip("/")}),
+        )
+        if date_posted and not is_search:
+            # The list is returned whole. Its address would keep `f_TPR`, so
+            # nothing downstream could tell the filter did nothing.
+            errors = result.setdefault("section_errors", {})
+            warning = dropped_filters_section_error(["date_posted"], base_url)
+            existing = errors.get("search_results")
+            if existing is None:
+                errors["search_results"] = warning
+            else:
+                existing["error_message"] = (
+                    f"{existing['error_message']} {warning['error_message']}"
+                )
+        return result
+
+    async def _page_job_list(
+        self,
+        base_url: str,
+        keywords: str,
+        max_pages: int,
+        tool_timeout: float,
+        paths: frozenset[str],
+    ) -> dict[str, Any]:
+        """Page a job search or a curated list and collect its job ids.
+
+        ``paths`` are the routes the list may land on. ``keywords`` is empty
+        for a curated list, which has none to lose.
+        """
         all_job_ids: list[str] = []
         seen_ids: set[str] = set()
         page_texts: list[str] = []
@@ -356,7 +421,8 @@ class JobReader:
             # of delay the run has already paid for.
             page_started = time.monotonic()
 
-            url = base_url if offset == 0 else f"{base_url}&start={offset}"
+            joiner = "&" if "?" in base_url else "?"
+            url = base_url if offset == 0 else f"{base_url}{joiner}start={offset}"
             # Against what is left of the tool's own timeout as well. The
             # per-page cap is twelve seconds and the whole search gets
             # `tool_timeout` times the fraction above, so a caller passing ten
@@ -416,7 +482,7 @@ class JobReader:
                 parsed_url = urlparse(capture.landed_url)
                 if (
                     parsed_url.netloc != "www.linkedin.com"
-                    or parsed_url.path.rstrip("/") not in JOB_SEARCH_PATHS
+                    or parsed_url.path.rstrip("/") not in paths
                 ):
                     logger.debug(
                         "Unexpected page URL after extraction: %s — "
