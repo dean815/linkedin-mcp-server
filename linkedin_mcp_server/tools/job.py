@@ -13,8 +13,10 @@ from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.dependencies import get_ready_extractor, tool_errors
+from linkedin_mcp_server.error_handler import CodedToolError, ErrorCode
 from linkedin_mcp_server.linkedin.identifiers import normalize_job_id
 from linkedin_mcp_server.linkedin.job_policy import JobsTrackerStage
+from linkedin_mcp_server.linkedin.job_policy import job_collection_url
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +288,15 @@ def register_job_tools(
             raw text), job_ids, and optional total, promoted_job_ids,
             references, pagination and section_errors.
         """
+        try:
+            # A name that is not a list slug is refused here, off the browser:
+            # get_ready_extractor can install Chromium or rotate a login before
+            # this call would have failed, and a plain ValueError reaches the
+            # caller masked, without the sentence that says what to pass.
+            job_collection_url(collection)
+        except ValueError as e:
+            raise CodedToolError(str(e), ErrorCode.INVALID_ARGUMENT) from e
+
         started = time.monotonic()
         extractor = await get_ready_extractor(ctx, tool_name="get_job_collection")
         logger.info("Reading job collection %r (max_pages=%d)", collection, max_pages)

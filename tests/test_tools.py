@@ -2948,3 +2948,36 @@ class TestToolTimeouts:
             tool = await mcp.get_tool(name)
             assert tool is not None
             assert tool.timeout == DEFAULT_TOOL_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "collection",
+    ["top applicant", "https://www.linkedin.com/jobs/collections/recommended/", ""],
+    ids=["spaces", "pasted url", "empty"],
+)
+async def test_a_bad_job_collection_name_says_what_to_pass(collection):
+    """A name that is not a list slug is corrected, not masked.
+
+    Refused before the browser is readied, and as a coded error, since a plain
+    ValueError reaches a masked client as "Error calling tool" with the
+    correction dropped.
+    """
+    from fastmcp.exceptions import ToolError
+
+    from linkedin_mcp_server.error_handler import CodedToolError, ErrorCode
+
+    mcp = FastMCP("test", mask_error_details=True)
+    _register(mcp, "job")
+
+    with (
+        patch(
+            "linkedin_mcp_server.tools.job.get_ready_extractor",
+            new_callable=AsyncMock,
+        ) as ready,
+        pytest.raises(ToolError, match="Pass the slug") as excinfo,
+    ):
+        await mcp.call_tool("get_job_collection", {"collection": collection})
+
+    ready.assert_not_awaited()
+    assert isinstance(excinfo.value, CodedToolError)
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
